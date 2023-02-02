@@ -303,12 +303,14 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', type=str, default='fb15k', help='fb15k or fb15-237')
     parser.add_argument('--architecture', type=str, default='ClassicLinkPredNet', help="ClassicLinkPredNet or VectorReconstructionNet")
     parser.add_argument('--relationfeatures', type=str, default='standard', help="standard (use the ones trained by RDF2Vec) or derived (derive them form the entity features automatically)")
+    parser.add_argument('--lr', type=float, default=.001, help="learning rate")
+
 
     args = parser.parse_args()
     dataset = args.dataset
     architecture = args.architecture
     relation_embeddings = True if args.relationfeatures == 'standard' else False
-
+    lr = args.lr
 
     # read in entities and relations for indexing
     entities = set()
@@ -326,11 +328,11 @@ if __name__ == '__main__':
     # load RDF2Vec models for features
     wv_model = Word2Vec.load(f'./data/{dataset}_rdf2vec/model')
 
-    data_train = read_lp_data(path='./data/fb15k/', entities=entities, relations=relations, data_sample='train',
+    data_train = read_lp_data(path=f'./data/{dataset}/', entities=entities, relations=relations, data_sample='train',
                               entity_embedding=True, relation_embeddings=relation_embeddings)
-    data_val = read_lp_data(path='./data/fb15k/', entities=entities, relations=relations, data_sample='valid',
+    data_val = read_lp_data(path=f'./data/{dataset}/', entities=entities, relations=relations, data_sample='valid',
                             entity_embedding=True, relation_embeddings=relation_embeddings)
-    data_test = read_lp_data(path='./data/fb15k/', entities=entities, relations=relations, data_sample='test',
+    data_test = read_lp_data(path=f'./data/{dataset}/', entities=entities, relations=relations, data_sample='test',
                              entity_embedding=True, relation_embeddings=relation_embeddings)
 
     # ClassicLinkPredNet
@@ -338,7 +340,7 @@ if __name__ == '__main__':
         model = ClassicLinkPredNet(EMBEDDING_DIM, HIDDEN_DIM)
         model.to(DEVICE)
         loss_function = torch.nn.MSELoss()
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.001)  # , weight_decay=1e-4
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)  # , weight_decay=1e-4
         model.train()
 
         for epoch in range(0, 5000):
@@ -362,8 +364,8 @@ if __name__ == '__main__':
 
         model_tail_pred.to(DEVICE)
         model_head_pred.to(DEVICE)
-        optimizer_tail_pred = torch.optim.Adam(model_tail_pred.parameters(), lr=.001)
-        optimizer_head_pred = torch.optim.Adam(model_head_pred.parameters(), lr=.001)
+        optimizer_tail_pred = torch.optim.Adam(model_tail_pred.parameters(), lr=lr)
+        optimizer_head_pred = torch.optim.Adam(model_head_pred.parameters(), lr=lr)
 
         loss_function = MSELoss()  # CosineEmbeddingLoss()
 
