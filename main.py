@@ -353,7 +353,7 @@ if __name__ == '__main__':
         print('test mrr:', mrr, 'mr:', mr, 'hits@10:', hits10)
 
     # VectorReconstructionNet
-    elif architecture == VectorReconstructionNet:
+    elif architecture == 'VectorReconstructionNet':
         torch.backends.cudnn.benchmark = True
         model_tail_pred = VectorReconstructionNet(EMBEDDING_DIM, HIDDEN_DIM)
         model_head_pred = VectorReconstructionNet(EMBEDDING_DIM, HIDDEN_DIM)
