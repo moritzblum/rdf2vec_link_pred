@@ -266,6 +266,9 @@ def compute_mrr_vector_reconstruction(model_tail_pred, model_head_pred, entity_f
         rank = compute_rank(out)
         ranks.append(rank)
 
+        out_model = model_head_pred(torch.reshape(entity_features[dst], (1, EMBEDDING_DIM)).float().to(DEVICE),
+                                    torch.reshape(relation_features[rel], (1, EMBEDDING_DIM)).float().to(DEVICE))
+
         # Try all nodes as heads, but delete true triplets:
         head_mask = torch.ones(len(entities), dtype=torch.bool)
         for (heads, tails), types in [
@@ -294,7 +297,6 @@ def compute_mrr_vector_reconstruction(model_tail_pred, model_head_pred, entity_f
 
 
 if __name__ == '__main__':
-    # python main.py --dataset fb15k --architecture VectorReconstructionNet --relationfeatures standard
 
     parser = argparse.ArgumentParser(description='rdf2vec link prediction')
     # specify dataset
