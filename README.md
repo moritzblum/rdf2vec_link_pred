@@ -33,4 +33,10 @@ with RDF2Vec embeddings that does not need a NN.
 
 ### Run 
 * VectorReconstructionNet `python main.py --dataset fb15k --architecture VectorReconstructionNet --relationfeatures derived`
-* ClassicLinkPredNet `python main.py --dataset fb15k --architecture ClassicLinkPredNet --relationfeatures derivec`
+* ClassicLinkPredNet `python main.py --dataset fb15k --architecture ClassicLinkPredNet --relationfeatures derived`
+
+
+nohup python main.py --dataset fb15k --architecture VectorReconstructionNet --relationfeatures derived > ./data/fb15k_vr_der.out &
+nohup python main.py --dataset fb15k --architecture VectorReconstructionNet --relationfeatures standard > ./data/fb15k_vr_std.out &
+nohup python main.py --dataset fb15k --architecture ClassicLinkPredNet --relationfeatures derived > ./data/fb15k_clp_der.out &
+nohup python main.py --dataset fb15k --architecture ClassicLinkPredNet --relationfeatures standard > ./data/fb15k_clp_std.out &

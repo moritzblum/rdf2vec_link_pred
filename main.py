@@ -16,7 +16,8 @@ from models import VectorReconstructionNet, ClassicLinkPredNet
 BATCH_SIZE = 1000
 EMBEDDING_DIM = 200
 HIDDEN_DIM = 200
-DEVICE = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
+#DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+DEVICE = torch.device('cuda')
 
 
 def read_lp_data(path, entities, relations, data_sample, entity_embedding=False, relation_embeddings=False):
@@ -59,10 +60,10 @@ def read_lp_data(path, entities, relations, data_sample, entity_embedding=False,
         x_relation = torch.tensor(x_relation)
 
 
-    return (Data(x_entity=x_entity,
+    return Data(x_entity=x_entity,
                  x_relation=x_relation,
                  edge_index=torch.tensor(edge_index).t(),
-                 edge_type=torch.tensor(edge_type)))
+                 edge_type=torch.tensor(edge_type))
 
 
 def train_vector_reconstruction(model, optimizer, entity_input='head'):
@@ -328,12 +329,25 @@ if __name__ == '__main__':
     # load RDF2Vec models for features
     wv_model = Word2Vec.load(f'./data/{dataset}_rdf2vec/model')
 
-    data_train = read_lp_data(path=f'./data/{dataset}/', entities=entities, relations=relations, data_sample='train',
-                              entity_embedding=True, relation_embeddings=relation_embeddings)
-    data_val = read_lp_data(path=f'./data/{dataset}/', entities=entities, relations=relations, data_sample='valid',
-                            entity_embedding=True, relation_embeddings=relation_embeddings)
-    data_test = read_lp_data(path=f'./data/{dataset}/', entities=entities, relations=relations, data_sample='test',
-                             entity_embedding=True, relation_embeddings=relation_embeddings)
+    if not os.path.isfile(f'./data/{dataset}/train.pt'):
+        data_train = read_lp_data(path=f'./data/{dataset}/', entities=entities, relations=relations, data_sample='train',
+                                  entity_embedding=True, relation_embeddings=relation_embeddings)
+        torch.save(data_train, f'./data/{dataset}/train.pt')
+
+    if not os.path.isfile(f'./data/{dataset}/val.pt'):
+        data_val = read_lp_data(path=f'./data/{dataset}/', entities=entities, relations=relations, data_sample='valid',
+                                entity_embedding=True, relation_embeddings=relation_embeddings)
+        torch.save(data_val, f'./data/{dataset}/val.pt')
+
+    if not os.path.isfile(f'./data/{dataset}/test.pt'):
+        data_test = read_lp_data(path=f'./data/{dataset}/', entities=entities, relations=relations, data_sample='test',
+                                 entity_embedding=True, relation_embeddings=relation_embeddings)
+        torch.save(data_test, f'./data/{dataset}/test.pt')
+
+    data_train = torch.load(f'./data/{dataset}/train.pt')
+    data_val = torch.load(f'./data/{dataset}/val.pt')
+    data_test = torch.load(f'./data/{dataset}/test.pt')
+    print('data loaded')
 
     # ClassicLinkPredNet
     if architecture == 'ClassicLinkPredNet':
@@ -350,7 +364,7 @@ if __name__ == '__main__':
                                            data_val, data_test, fast=True)
                 print('mrr:', mrr, 'mr:', mr, 'hits@10:', hits10)
 
-        torch.save(model.state_dict(), 'model_ClassicLinkPredNet.pth')
+        torch.save(model.state_dict(), 'model_ClassicLinkPredNet.pt')
         mrr, mr, hits10 = compute_mrr_triple_scoring(model, len(entities), data_val.edge_index, data_val.edge_type, data_train, data_val, data_test, fast=False)
         print('val mrr:', mrr, 'mr:', mr, 'hits@10:', hits10)
         mrr, mr, hits10 = compute_mrr_triple_scoring(model, len(entities), data_test.edge_index, data_test.edge_type, data_train, data_val, data_test, fast=False)
@@ -383,7 +397,7 @@ if __name__ == '__main__':
         mrr, mr, hits10 = compute_mrr_vector_reconstruction(model_tail_pred, model_head_pred, data_train.x_entity, data_train.x_relation,
                                       data_test.edge_index, data_test.edge_type, fast=False)
         print('test mrr:', mrr, 'mr:', mr, 'hits@10:', hits10)
-        torch.save(model_tail_pred.state_dict(), 'model_VectorReconstructionNet_tail_pred.pth')
-        torch.save(model_head_pred.state_dict(), 'model_VectorReconstructionNet_head_pred.pth')
+        torch.save(model_tail_pred.state_dict(), 'model_VectorReconstructionNet_tail_pred.pt')
+        torch.save(model_head_pred.state_dict(), 'model_VectorReconstructionNet_head_pred.pt')
 
 
