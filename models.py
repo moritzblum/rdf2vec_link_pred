@@ -7,6 +7,7 @@ class ClassicLinkPredNet (nn.Module):
         super().__init__()
         self.fc0 = nn.Linear(embedding_dim * 3, hidden_dim)
         self.fc1 = nn.Linear(hidden_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
         self.fc_out = nn.Linear(hidden_dim, 1)
         self.apply(self._init_weights)
 
@@ -20,6 +21,7 @@ class ClassicLinkPredNet (nn.Module):
         out = torch.cat([h_head, h_relation, h_tail], dim=1)
         out = torch.sigmoid(self.fc0(out))
         out = torch.sigmoid(self.fc1(out))
+        out = torch.sigmoid(self.fc2(out))
         out = torch.sigmoid(self.fc_out(out))
         return out
 
