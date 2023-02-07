@@ -163,8 +163,8 @@ def compute_mrr_triple_scoring(model, num_entities, eval_edge_index, eval_edge_t
                                fast=False):
     ranks = []
     num_samples = eval_edge_type.numel() if not fast else 5000
-    for i in tqdm(range(num_samples)):
-        (src, dst), rel = eval_edge_index[:, i], eval_edge_type[i]
+    for triple_index in tqdm(range(num_samples)):
+        (src, dst), rel = eval_edge_index[:, triple_index], eval_edge_type[triple_index]
 
         # Try all nodes as tails, but delete true triplets:
         tail_mask = torch.ones(num_entities, dtype=torch.bool)
@@ -178,10 +178,10 @@ def compute_mrr_triple_scoring(model, num_entities, eval_edge_index, eval_edge_t
         tail = torch.arange(num_entities)[tail_mask]
         tail = torch.cat([torch.tensor([dst]), tail])
         head = torch.full_like(tail, fill_value=src)
-        eval_edge_type = torch.full_like(tail, fill_value=rel).to(DEVICE)
+        eval_edge_typ_tensor = torch.full_like(tail, fill_value=rel).to(DEVICE)
 
         h = x_entity[head]
-        r = x_relation[eval_edge_type]
+        r = x_relation[eval_edge_typ_tensor]
         t = x_entity[tail]
         out = model.forward(h, r, t)
 
@@ -200,8 +200,10 @@ def compute_mrr_triple_scoring(model, num_entities, eval_edge_index, eval_edge_t
         head = torch.arange(num_entities)[head_mask]
         head = torch.cat([torch.tensor([src]), head])
         tail = torch.full_like(head, fill_value=dst)
+        eval_edge_typ_tensor = torch.full_like(head, fill_value=rel).to(DEVICE)
 
         h = x_entity[head]
+        r = x_relation[eval_edge_typ_tensor]
         t = x_entity[tail]
         out = model.forward(h, r, t)
 
@@ -373,12 +375,12 @@ if __name__ == '__main__':
         for epoch in range(0, 5000):
             train_triple_scoring(model, optimizer)
             if epoch % 50 == 0:
-                mrr, mr, hits10 = compute_mrr_triple_scoring(model, num_entities, data_val.edge_index,
-                                                             data_val.edge_type, fast=True)
+                mrr, mr, hits10 = compute_mrr_triple_scoring(model, num_entities, val_edge_index,
+                                                             val_edge_type, fast=True)
                 print('mrr:', mrr, 'mr:', mr, 'hits@10:', hits10)
 
         torch.save(model.state_dict(), 'model_ClassicLinkPredNet.pt')
-        mrr, mr, hits10 = compute_mrr_triple_scoring(model, num_entities, data_val.edge_index, data_val.edge_type,
+        mrr, mr, hits10 = compute_mrr_triple_scoring(model, num_entities, val_edge_index, val_edge_type,
                                                      fast=False)
         print('val mrr:', mrr, 'mr:', mr, 'hits@10:', hits10)
         mrr, mr, hits10 = compute_mrr_triple_scoring(model, num_entities, data_test.edge_index, data_test.edge_type,

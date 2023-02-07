@@ -19,9 +19,9 @@ class ClassicLinkPredNet (nn.Module):
 
     def forward(self, h_head, h_relation, h_tail):
         out = torch.cat([h_head, h_relation, h_tail], dim=1)
-        out = torch.sigmoid(self.fc0(out))
-        out = torch.sigmoid(self.fc1(out))
-        out = torch.sigmoid(self.fc2(out))
+        out = torch.relu(self.fc0(out))
+        out = torch.relu(self.fc1(out))
+        #out = torch.sigmoid(self.fc2(out))
         out = torch.sigmoid(self.fc_out(out))
         return out
 
