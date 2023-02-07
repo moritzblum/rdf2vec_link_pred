@@ -18,7 +18,7 @@ EMBEDDING_DIM = 200
 DEVICE = torch.device('cuda:1')
 
 
-def read_lp_data(path, entities, relations, data_sample, entity_embedding=False, relation_embeddings=False):
+def read_lp_data(path, entities, relations, data_sample, wv_model, relation_embeddings=False):
     edge_index = []
     edge_type = []
 
@@ -28,16 +28,13 @@ def read_lp_data(path, entities, relations, data_sample, entity_embedding=False,
             edge_index.append([entities.index(head), entities.index(tail)])
             edge_type.append(relations.index(relation))
 
-    if entity_embedding:
-        x_entity = []
-        for e in entities:
-            if 'http://wd/' + e in wv_model.wv:
-                x_entity.append(wv_model.wv['http://wd/' + e])
-            else:
-                x_entity.append(np.zeros(EMBEDDING_DIM))
-        x_entity = torch.tensor(x_entity)
-    else:
-        x_entity = None
+    x_entity = []
+    for e in entities:
+        if 'http://wd/' + e in wv_model.wv:
+            x_entity.append(wv_model.wv['http://wd/' + e])
+        else:
+            x_entity.append(np.zeros(EMBEDDING_DIM))
+    x_entity = torch.tensor(x_entity)
 
     if not relation_embeddings:
         # derive features according to Paulheim et al.
@@ -212,7 +209,10 @@ def compute_mrr_triple_scoring(model, num_entities, eval_edge_index, eval_edge_t
 
     num_ranks = len(ranks)
     ranks = torch.tensor(ranks, dtype=torch.float)
-    return (1. / ranks).mean(), ranks.mean(), ranks[ranks <= 10].size(0) / num_ranks
+    return (1. / ranks).mean(), ranks.mean(), ranks[ranks <= 10].size(0) / num_ranks, \
+           ranks[ranks <= 5].size(0) / num_ranks, \
+           ranks[ranks <= 3].size(0) / num_ranks, \
+           ranks[ranks <= 1].size(0) / num_ranks
 
 
 @torch.no_grad()
@@ -286,7 +286,10 @@ def compute_mrr_vector_reconstruction(model_tail_pred, model_head_pred, entity_f
 
     num_ranks = len(ranks)
     ranks = torch.tensor(ranks, dtype=torch.float)
-    return (1. / ranks).mean(), ranks.mean(), ranks[ranks <= 10].size(0) / num_ranks
+    return (1. / ranks).mean(), ranks.mean(), ranks[ranks <= 10].size(0) / num_ranks, \
+           ranks[ranks <= 5].size(0) / num_ranks, \
+           ranks[ranks <= 3].size(0) / num_ranks, \
+           ranks[ranks <= 1].size(0) / num_ranks
 
 
 if __name__ == '__main__':
@@ -330,18 +333,18 @@ if __name__ == '__main__':
 
     if not os.path.isfile(f'./data/{dataset}/train.pt'):
         data_train = read_lp_data(path=f'./data/{dataset}/', entities=entities, relations=relations,
-                                  data_sample='train',
-                                  entity_embedding=True, relation_embeddings=relation_embeddings)
+                                  data_sample='train', wv_model=wv_model,
+                                  relation_embeddings=relation_embeddings)
         torch.save(data_train, f'./data/{dataset}/train.pt')
 
     if not os.path.isfile(f'./data/{dataset}/val.pt'):
         data_val = read_lp_data(path=f'./data/{dataset}/', entities=entities, relations=relations, data_sample='valid',
-                                entity_embedding=True, relation_embeddings=relation_embeddings)
+                                wv_model=wv_model, relation_embeddings=relation_embeddings)
         torch.save(data_val, f'./data/{dataset}/val.pt')
 
     if not os.path.isfile(f'./data/{dataset}/test.pt'):
         data_test = read_lp_data(path=f'./data/{dataset}/', entities=entities, relations=relations, data_sample='test',
-                                 entity_embedding=True, relation_embeddings=relation_embeddings)
+                                 wv_model=wv_model, relation_embeddings=relation_embeddings)
         torch.save(data_test, f'./data/{dataset}/test.pt')
 
     data_train = torch.load(f'./data/{dataset}/train.pt')
@@ -375,17 +378,17 @@ if __name__ == '__main__':
         for epoch in range(0, 1000):
             train_triple_scoring(model, optimizer)
             if epoch % 50 == 0:
-                mrr, mr, hits10 = compute_mrr_triple_scoring(model, num_entities, val_edge_index,
+                mrr, mr, hits10, hits5, hits3, hits1 = compute_mrr_triple_scoring(model, num_entities, val_edge_index,
                                                              val_edge_type, fast=True)
-                print('mrr:', mrr, 'mr:', mr, 'hits@10:', hits10)
+                print('mrr:', mrr, 'mr:', mr, 'hits@10:', hits10, 'hits@5:', hits5, 'hits@3:', hits3, 'hits@1:', hits1)
 
         torch.save(model.state_dict(), 'model_ClassicLinkPredNet.pt')
-        mrr, mr, hits10 = compute_mrr_triple_scoring(model, num_entities, val_edge_index, val_edge_type,
+        mrr, mr, hits10, hits5, hits3, hits1 = compute_mrr_triple_scoring(model, num_entities, val_edge_index, val_edge_type,
                                                      fast=False)
-        print('val mrr:', mrr, 'mr:', mr, 'hits@10:', hits10)
-        mrr, mr, hits10 = compute_mrr_triple_scoring(model, num_entities, data_test.edge_index, data_test.edge_type,
+        print('val mrr:', mrr, 'mr:', mr, 'hits@10:', hits10, 'hits@5:', hits5, 'hits@3:', hits3, 'hits@1:', hits1)
+        mrr, mr, hits10, hits5, hits3, hits1 = compute_mrr_triple_scoring(model, num_entities, data_test.edge_index, data_test.edge_type,
                                                      fast=False)
-        print('test mrr:', mrr, 'mr:', mr, 'hits@10:', hits10)
+        print('test mrr:', mrr, 'mr:', mr, 'hits@10:', hits10, 'hits@5:', hits5, 'hits@3:', hits3, 'hits@1:', hits1)
 
     # VectorReconstructionNet
     elif architecture == 'VectorReconstructionNet':
@@ -404,18 +407,18 @@ if __name__ == '__main__':
             train_vector_reconstruction(model_tail_pred, optimizer_tail_pred, 'head')
             train_vector_reconstruction(model_head_pred, optimizer_head_pred, 'tail')
             if epoch % 50 == 0:
-                mrr, mr, hits10 = compute_mrr_vector_reconstruction(model_tail_pred, model_head_pred,
+                mrr, mr, hits10, hits5, hits3, hits1 = compute_mrr_vector_reconstruction(model_tail_pred, model_head_pred,
                                                                     x_entity, x_relation,
                                                                     data_val.edge_index, data_val.edge_type, fast=True)
-                print('mrr:', mrr, 'mr:', mr, 'hits@10:', hits10)
+                print('mrr:', mrr, 'mr:', mr, 'hits@10:', hits10, 'hits@5:', hits5, 'hits@3:', hits3, 'hits@1:', hits1)
 
-        mrr, mr, hits10 = compute_mrr_vector_reconstruction(model_tail_pred, model_head_pred, x_entity,
+        mrr, mr, hits10, hits5, hits3, hits1 = compute_mrr_vector_reconstruction(model_tail_pred, model_head_pred, x_entity,
                                                             x_relation,
                                                             data_val.edge_index, data_val.edge_type, fast=False)
-        print('val mrr:', mrr, 'mr:', mr, 'hits@10:', hits10)
-        mrr, mr, hits10 = compute_mrr_vector_reconstruction(model_tail_pred, model_head_pred, x_entity,
+        print('val mrr:', mrr, 'mr:', mr, 'hits@10:', hits10, 'hits@5:', hits5, 'hits@3:', hits3, 'hits@1:', hits1)
+        mrr, mr, hits10, hits5, hits3, hits1 = compute_mrr_vector_reconstruction(model_tail_pred, model_head_pred, x_entity,
                                                             x_relation,
                                                             data_test.edge_index, data_test.edge_type, fast=False)
-        print('test mrr:', mrr, 'mr:', mr, 'hits@10:', hits10)
+        print('test mrr:', mrr, 'mr:', mr, 'hits@10:', hits10, 'hits@5:', hits5, 'hits@3:', hits3, 'hits@1:', hits1)
         torch.save(model_tail_pred.state_dict(), 'model_VectorReconstructionNet_tail_pred.pt')
         torch.save(model_head_pred.state_dict(), 'model_VectorReconstructionNet_head_pred.pt')
