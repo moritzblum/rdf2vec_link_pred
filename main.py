@@ -372,7 +372,7 @@ if __name__ == '__main__':
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)  # , weight_decay=1e-4
         model.train()
 
-        for epoch in range(0, 5000):
+        for epoch in range(0, 1000):
             train_triple_scoring(model, optimizer)
             if epoch % 50 == 0:
                 mrr, mr, hits10 = compute_mrr_triple_scoring(model, num_entities, val_edge_index,
