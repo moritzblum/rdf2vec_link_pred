@@ -70,7 +70,6 @@ def train_vector_reconstruction(model, optimizer, entity_input='head'):
     indices = np.arange(len(edge_index_batches))
     np.random.shuffle(indices)
 
-
     loss_total = 0
     for i in indices:
         edge_idxs, relation_idxs = edge_index_batches[i], edge_type_batches[i]
@@ -125,7 +124,6 @@ def train_triple_scoring(model, optimizer):
 
     loss_total = 0
     for i in indices:
-
         edge_idxs, relation_idx = edge_index_batches[i], edge_type_batches[i]
         optimizer.zero_grad()
 
@@ -140,8 +138,8 @@ def train_triple_scoring(model, optimizer):
         tail_embeddings_neg = x_entity[edge_idxs_neg[:, 1]]
 
         out = torch.reshape(model.forward(torch.cat([head_embeddings_pos, head_embeddings_neg], dim=0),
-                            torch.cat([relation_embeddings, relation_embeddings], dim=0),
-                            torch.cat([tail_embeddings_pos, tail_embeddings_neg], dim=0)), (-1, ))
+                                          torch.cat([relation_embeddings, relation_embeddings], dim=0),
+                                          torch.cat([tail_embeddings_pos, tail_embeddings_neg], dim=0)), (-1,))
 
         # classification target: first for true, then for corrupted triples
         gt = torch.cat([torch.ones(len(relation_idx)), torch.zeros(len(relation_idx))], dim=0).to(DEVICE)
@@ -156,8 +154,17 @@ def train_triple_scoring(model, optimizer):
 
 
 @torch.no_grad()
-def compute_mrr_triple_scoring(model, num_entities, eval_edge_index, eval_edge_type,
-                               fast=False):
+def compute_mrr_triple_scoring(model, eval_edge_index, eval_edge_type,
+                               fast=False, entities_idx=None):
+
+    if entities_idx:
+        # inverse relevant_entities_idx
+        entities_idx = torch.tensor(entities_idx)
+        mask = torch.ones(num_entities, dtype=torch.bool)
+        mask[entities_idx] = False
+        not_relevant_entities_idx = torch.range(0, num_entities - 1, dtype=torch.int)[~mask]
+
+    # todo implement inductive link prediction evaluation - restrict to relevant entities
     ranks = []
     num_samples = eval_edge_type.numel() if not fast else 5000
     for triple_index in tqdm(range(num_samples)):
@@ -171,6 +178,9 @@ def compute_mrr_triple_scoring(model, num_entities, eval_edge_index, eval_edge_t
             (test_edge_index, test_edge_type),
         ]:
             tail_mask[tails[(heads == src) & (types == rel)]] = False
+
+        if entities_idx:
+            tail_mask[not_relevant_entities_idx] = False
 
         tail = torch.arange(num_entities)[tail_mask]
         tail = torch.cat([torch.tensor([dst]), tail])
@@ -193,6 +203,9 @@ def compute_mrr_triple_scoring(model, num_entities, eval_edge_index, eval_edge_t
             (test_edge_index, test_edge_type),
         ]:
             head_mask[heads[(tails == dst) & (types == rel)]] = False
+
+        if entities_idx:
+            head_mask[not_relevant_entities_idx] = False
 
         head = torch.arange(num_entities)[head_mask]
         head = torch.cat([torch.tensor([src]), head])
@@ -228,9 +241,28 @@ def compute_rank(ranks):
 
 @torch.no_grad()
 def compute_mrr_vector_reconstruction(model_tail_pred, model_head_pred, entity_features, relation_features, edge_index,
-                                      edge_type,
-                                      fast=False):
-    eval_loss_function = loss_function = MSELoss(reduction='none')  # CosineEmbeddingLoss(reduction='none')
+                                      edge_type, fast=False, inductive=False, entities_idx=None):
+    """
+
+    :param model_tail_pred:
+    :param model_head_pred:
+    :param entity_features:
+    :param relation_features:
+    :param edge_index:
+    :param edge_type:
+    :param entities_idx: entities not in the considered graph - only required in the inductive setting
+    :param fast:
+    :param inductive:
+    :return:
+    """
+    if entities_idx:
+        # inverse relevant_entities_idx
+        entities_idx = torch.tensor(entities_idx)
+        mask = torch.ones(num_entities, dtype=torch.bool)
+        mask[entities_idx] = False
+        not_relevant_entities_idx = torch.range(0, num_entities - 1, dtype=torch.int)[~mask]
+
+    eval_loss_function = MSELoss(reduction='none')  # CosineEmbeddingLoss(reduction='none')
 
     num_samples = edge_type.numel() if not fast else 5000
     ranks = []
@@ -249,8 +281,12 @@ def compute_mrr_vector_reconstruction(model_tail_pred, model_head_pred, entity_f
         ]:
             tail_mask[tails[(heads == src) & (types == rel)]] = False
 
+        if entities_idx:
+            tail_mask[not_relevant_entities_idx] = False
+
         tail = torch.arange(num_entities)[tail_mask]
         tail = torch.cat([torch.tensor([dst]), tail])
+
         tail_features = entity_features[tail].to(DEVICE)
 
         out = out_model.repeat(len(tail), 1)
@@ -272,6 +308,9 @@ def compute_mrr_vector_reconstruction(model_tail_pred, model_head_pred, entity_f
         ]:
             head_mask[heads[(tails == dst) & (types == rel)]] = False
 
+        if entities_idx:
+            head_mask[not_relevant_entities_idx] = False
+
         head = torch.arange(num_entities)[head_mask]
         head = torch.cat([torch.tensor([src]), head])
         head_features = entity_features[head].to(DEVICE)
@@ -292,11 +331,35 @@ def compute_mrr_vector_reconstruction(model_tail_pred, model_head_pred, entity_f
            ranks[ranks <= 1].size(0) / num_ranks
 
 
+def get_ilpc_entities_relations():
+    # load data
+    entities_ilpc = set()
+    relations_ilpc = set()
+    entities_ilpc_train = set()
+    entitites_ilpc_inference = set()
+
+    for graph in ['train', 'inference']:
+        with open(f'./data/ilpc/raw/large/{graph}.txt') as triples_in:
+            for line in triples_in:
+                head, relation, tail = line[:-1].split('\t')
+                entities_ilpc.add(head)
+                entities_ilpc.add(tail)
+                relations_ilpc.add(relation)
+                if graph == 'train':
+                    entities_ilpc_train.add(head)
+                    entities_ilpc_train.add(tail)
+                else:
+                    entitites_ilpc_inference.add(head)
+                    entitites_ilpc_inference.add(tail)
+
+    return list(entities_ilpc), list(relations_ilpc), list(entities_ilpc_train), list(entitites_ilpc_inference)
+
+
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='rdf2vec link prediction')
     # specify dataset
-    parser.add_argument('--dataset', type=str, default='fb15k', help='fb15k or fb15-237')
+    parser.add_argument('--dataset', type=str, default='fb15k', help='fb15k or fb15-237 or ilpc')
     parser.add_argument('--architecture', type=str, default='ClassicLinkPredNet',
                         help="ClassicLinkPredNet or VectorReconstructionNet")
     parser.add_argument('--relationfeatures', type=str, default='standard',
@@ -304,52 +367,101 @@ if __name__ == '__main__':
     parser.add_argument('--lr', type=float, default=.001, help="learning rate")
     parser.add_argument('--bs', type=int, default=1000, help="learning rate")
     parser.add_argument('--hidden', type=int, default=200, help="hidden dim")
+    parser.add_argument('--wv', type=str, default='ilpc_rebel',
+                        help="only for ilpc: ilpc_rebel or ilpc_joint2vec or ilpc_hybrid2vec")
 
     args = parser.parse_args()
     dataset = args.dataset
+    inductive = dataset == 'ilpc'
     architecture = args.architecture
     relation_embeddings = True if args.relationfeatures == 'standard' else False
     lr = args.lr
     BATCH_SIZE = args.bs  # 1000
     HIDDEN_DIM = args.hidden
 
-    # read in entities and relations for indexing
-    entities = set()
-    relations = set()
-    for graph in ['train', 'valid', 'test']:
-        with open(f'./data/{dataset}/{graph}.txt') as triples_in:
-            for line in triples_in:
-                head, relation, tail = line[:-1].split('\t')
-                entities.add(head)
-                entities.add(tail)
-                relations.add(relation)
-    entities = list(entities)
-    relations = list(relations)
+    # only required for inductive link prediction
+    entities_train_idx = None
+    entities_inference_idx = None
 
-    num_entities = len(entities)
+    if dataset in ['fb15k', 'fb15k-237']:
+        # read in entities and relations for indexing
+        entities = set()
+        relations = set()
+        for graph in ['train', 'valid', 'test']:
+            with open(f'./data/{dataset}/{graph}.txt') as triples_in:
+                for line in triples_in:
+                    head, relation, tail = line[:-1].split('\t')
+                    entities.add(head)
+                    entities.add(tail)
+                    relations.add(relation)
+        entities = list(entities)
+        relations = list(relations)
 
-    # load RDF2Vec models for features
-    wv_model = Word2Vec.load(f'./data/{dataset}_rdf2vec/model')
+        num_entities = len(entities)
 
-    if not os.path.isfile(f'./data/{dataset}/train.pt'):
-        data_train = read_lp_data(path=f'./data/{dataset}/', entities=entities, relations=relations,
-                                  data_sample='train', wv_model=wv_model,
-                                  relation_embeddings=relation_embeddings)
-        torch.save(data_train, f'./data/{dataset}/train.pt')
+        # load RDF2Vec models for features
+        wv_model = Word2Vec.load(f'./data/{dataset}_rdf2vec/model')
 
-    if not os.path.isfile(f'./data/{dataset}/val.pt'):
-        data_val = read_lp_data(path=f'./data/{dataset}/', entities=entities, relations=relations, data_sample='valid',
-                                wv_model=wv_model, relation_embeddings=relation_embeddings)
-        torch.save(data_val, f'./data/{dataset}/val.pt')
+        if not os.path.isfile(f'./data/{dataset}/train.pt'):
+            data_train = read_lp_data(path=f'./data/{dataset}/', entities=entities, relations=relations,
+                                      data_sample='train', wv_model=wv_model,
+                                      relation_embeddings=relation_embeddings)
+            torch.save(data_train, f'./data/{dataset}/train.pt')
 
-    if not os.path.isfile(f'./data/{dataset}/test.pt'):
-        data_test = read_lp_data(path=f'./data/{dataset}/', entities=entities, relations=relations, data_sample='test',
-                                 wv_model=wv_model, relation_embeddings=relation_embeddings)
-        torch.save(data_test, f'./data/{dataset}/test.pt')
+        if not os.path.isfile(f'./data/{dataset}/val.pt'):
+            data_val = read_lp_data(path=f'./data/{dataset}/', entities=entities, relations=relations,
+                                    data_sample='valid',
+                                    wv_model=wv_model, relation_embeddings=relation_embeddings)
+            torch.save(data_val, f'./data/{dataset}/val.pt')
 
-    data_train = torch.load(f'./data/{dataset}/train.pt')
-    data_val = torch.load(f'./data/{dataset}/val.pt')
-    data_test = torch.load(f'./data/{dataset}/test.pt')
+        if not os.path.isfile(f'./data/{dataset}/test.pt'):
+            data_test = read_lp_data(path=f'./data/{dataset}/', entities=entities, relations=relations,
+                                     data_sample='test',
+                                     wv_model=wv_model, relation_embeddings=relation_embeddings)
+            torch.save(data_test, f'./data/{dataset}/test.pt')
+
+        data_train = torch.load(f'./data/{dataset}/train.pt')
+        data_val = torch.load(f'./data/{dataset}/val.pt')
+        data_test = torch.load(f'./data/{dataset}/test.pt')
+
+    if dataset == 'ilpc':
+        wv_type = args.wv
+
+        # start loading data
+        entities_ilpc, relations_ilpc, entities_ilpc_train, entitites_ilpc_inference = get_ilpc_entities_relations()
+        num_entities = len(entities_ilpc)
+
+        entities_train_idx = [entities_ilpc.index(uri) for uri in entities_ilpc_train]
+        entities_inference_idx = [entities_ilpc.index(uri) for uri in entitites_ilpc_inference]
+        print('num_entities (train/inf):', num_entities,
+              f'({len(entities_train_idx)}/{len(entities_inference_idx)})')
+
+        # load RDF2Vec models for features
+        print('start loading data')
+        if not os.path.isfile(f'./data/{wv_type}/train.pt') or \
+                not os.path.isfile(f'./data/{wv_type}/val.pt') or \
+                not os.path.isfile(f'./data/{wv_type}/test.pt'):
+            wv_model = Word2Vec.load(f'./data/{wv_type}/model')
+
+        if not os.path.isfile(f'./data/{wv_type}/train.pt'):
+            data_train = read_lp_data(path=f'./data/ilpc/raw/large', entities=entities_ilpc, relations=relations_ilpc,
+                                      data_sample='train', wv_model=wv_model, relation_embeddings=False)
+            torch.save(data_train, f'./data/{wv_type}/train.pt')
+
+        if not os.path.isfile(f'./data/{wv_type}/val.pt'):
+            data_val = read_lp_data(path=f'./data/ilpc/raw/large', entities=entities_ilpc, relations=relations_ilpc,
+                                    data_sample='inference_validation', wv_model=wv_model, relation_embeddings=False)
+            torch.save(data_val, f'./data/{wv_type}/val.pt')
+
+        if not os.path.isfile(f'./data/{wv_type}/test.pt'):
+            data_test = read_lp_data(path=f'./data/ilpc/raw/large', entities=entities_ilpc, relations=relations_ilpc,
+                                     data_sample='inference_test', wv_model=wv_model, relation_embeddings=False)
+            torch.save(data_test, f'./data/{wv_type}/test.pt')
+
+        data_train = torch.load(f'./data/{wv_type}/train.pt')
+        data_val = torch.load(f'./data/{wv_type}/val.pt')
+        data_test = torch.load(f'./data/{wv_type}/test.pt')
+
     print('data loaded')
 
     # load features to GPU
@@ -371,23 +483,32 @@ if __name__ == '__main__':
     if architecture == 'ClassicLinkPredNet':
         model = ClassicLinkPredNet(EMBEDDING_DIM, HIDDEN_DIM)
         model.to(DEVICE)
-        loss_function = torch.nn.BCELoss() #torch.nn.MSELoss()
+        loss_function = torch.nn.BCELoss()  # torch.nn.MSELoss()
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)  # , weight_decay=1e-4
         model.train()
 
         for epoch in range(0, 1000):
             train_triple_scoring(model, optimizer)
             if epoch % 50 == 0:
-                mrr, mr, hits10, hits5, hits3, hits1 = compute_mrr_triple_scoring(model, num_entities, val_edge_index,
-                                                             val_edge_type, fast=True)
+                mrr, mr, hits10, hits5, hits3, hits1 = compute_mrr_triple_scoring(model,
+                                                                                  val_edge_index,
+                                                                                  val_edge_type,
+                                                                                  fast=True,
+                                                                                  entities_idx=entities_inference_idx)
                 print('mrr:', mrr, 'mr:', mr, 'hits@10:', hits10, 'hits@5:', hits5, 'hits@3:', hits3, 'hits@1:', hits1)
 
         torch.save(model.state_dict(), 'model_ClassicLinkPredNet.pt')
-        mrr, mr, hits10, hits5, hits3, hits1 = compute_mrr_triple_scoring(model, num_entities, val_edge_index, val_edge_type,
-                                                     fast=False)
+        mrr, mr, hits10, hits5, hits3, hits1 = compute_mrr_triple_scoring(model,
+                                                                          val_edge_index,
+                                                                          val_edge_type,
+                                                                          fast=False,
+                                                                          entities_idx=entities_inference_idx)
         print('val mrr:', mrr, 'mr:', mr, 'hits@10:', hits10, 'hits@5:', hits5, 'hits@3:', hits3, 'hits@1:', hits1)
-        mrr, mr, hits10, hits5, hits3, hits1 = compute_mrr_triple_scoring(model, num_entities, data_test.edge_index, data_test.edge_type,
-                                                     fast=False)
+        mrr, mr, hits10, hits5, hits3, hits1 = compute_mrr_triple_scoring(model,
+                                                                          data_test.edge_index,
+                                                                          data_test.edge_type,
+                                                                          fast=False,
+                                                                          entities_idx=entities_inference_idx)
         print('test mrr:', mrr, 'mr:', mr, 'hits@10:', hits10, 'hits@5:', hits5, 'hits@3:', hits3, 'hits@1:', hits1)
 
     # VectorReconstructionNet
@@ -403,22 +524,40 @@ if __name__ == '__main__':
 
         loss_function = MSELoss()  # CosineEmbeddingLoss()
 
-        for epoch in range(0, 5000):
+        for epoch in range(1, 5000):
             train_vector_reconstruction(model_tail_pred, optimizer_tail_pred, 'head')
             train_vector_reconstruction(model_head_pred, optimizer_head_pred, 'tail')
             if epoch % 50 == 0:
-                mrr, mr, hits10, hits5, hits3, hits1 = compute_mrr_vector_reconstruction(model_tail_pred, model_head_pred,
-                                                                    x_entity, x_relation,
-                                                                    data_val.edge_index, data_val.edge_type, fast=True)
+                mrr, mr, hits10, hits5, hits3, hits1 = compute_mrr_vector_reconstruction(model_tail_pred,
+                                                                                         model_head_pred,
+                                                                                         x_entity,
+                                                                                         x_relation,
+                                                                                         data_val.edge_index,
+                                                                                         data_val.edge_type,
+                                                                                         fast=True,
+                                                                                         inductive=inductive,
+                                                                                         entities_idx=entities_inference_idx)
                 print('mrr:', mrr, 'mr:', mr, 'hits@10:', hits10, 'hits@5:', hits5, 'hits@3:', hits3, 'hits@1:', hits1)
 
-        mrr, mr, hits10, hits5, hits3, hits1 = compute_mrr_vector_reconstruction(model_tail_pred, model_head_pred, x_entity,
-                                                            x_relation,
-                                                            data_val.edge_index, data_val.edge_type, fast=False)
+        mrr, mr, hits10, hits5, hits3, hits1 = compute_mrr_vector_reconstruction(model_tail_pred,
+                                                                                 model_head_pred,
+                                                                                 x_entity,
+                                                                                 x_relation,
+                                                                                 data_val.edge_index,
+                                                                                 data_val.edge_type,
+                                                                                 fast=False,
+                                                                                 inductive=inductive,
+                                                                                 entities_idx=entities_inference_idx)
         print('val mrr:', mrr, 'mr:', mr, 'hits@10:', hits10, 'hits@5:', hits5, 'hits@3:', hits3, 'hits@1:', hits1)
-        mrr, mr, hits10, hits5, hits3, hits1 = compute_mrr_vector_reconstruction(model_tail_pred, model_head_pred, x_entity,
-                                                            x_relation,
-                                                            data_test.edge_index, data_test.edge_type, fast=False)
+        mrr, mr, hits10, hits5, hits3, hits1 = compute_mrr_vector_reconstruction(model_tail_pred,
+                                                                                 model_head_pred,
+                                                                                 x_entity,
+                                                                                 x_relation,
+                                                                                 data_test.edge_index,
+                                                                                 data_test.edge_type,
+                                                                                 fast=False,
+                                                                                 inductive=inductive,
+                                                                                 entities_idx=entities_inference_idx)
         print('test mrr:', mrr, 'mr:', mr, 'hits@10:', hits10, 'hits@5:', hits5, 'hits@3:', hits3, 'hits@1:', hits1)
         torch.save(model_tail_pred.state_dict(), 'model_VectorReconstructionNet_tail_pred.pt')
         torch.save(model_head_pred.state_dict(), 'model_VectorReconstructionNet_head_pred.pt')

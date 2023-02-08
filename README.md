@@ -11,15 +11,19 @@ To train the RDF2Vec embeddings, we use the jRDF2Vec framework. Just call the fo
 * `java -Xmx10g -jar jrdf2vec-1.3-SNAPSHOT.jar -graph ./data/fb15k-237/train_rdf.nt -numberOfWalks 2000 -depth 4 -walkGenerationMode "MID_WALKS" -walkDirectory ./data/fb15k-237_rdf2vec -dimension 200 -epochs 25 -window 5`
 
 To train the inductive link prediction (ILPC) embeddings, run the following commands:
-* `java -Xmx200g -jar jrdf2vec-1.3-SNAPSHOT.jar -graph ./data/ilpc/raw/large/train_rdf.nt -numberOfWalks 2000 -depth 4 -walkGenerationMode "MID_WALKS" -walkDirectory ./data/ilpc-large_rdf2vec -dimension 200 -epochs 25 -window 5`
-* `java -Xmx200g -jar jrdf2vec-1.3-SNAPSHOT.jar -graph ./data/ilpc/raw/small/train_rdf.nt -numberOfWalks 2000 -depth 4 -walkGenerationMode "MID_WALKS" -walkDirectory ./data/ilpc-small_rdf2vec -dimension 200 -epochs 25 -window 5`
 
 * `mkdir ./data/ilpc-large_rebel`
 * `mkdir ./data/ilpc-large_joint2vec`
 * `mkdir ./data/ilpc-large_hybrid2vec`
-* `cp ./data/ilpc_rebel/ilpc_rebel.txt.gz ./data/ilpc_joint2vec`
-
+* `python reformat.py`
 * `java -Xmx200g -jar jrdf2vec-1.2-SNAPSHOT.jar -onlyTraining -walkDirectory ./data/ilpc_rebel -dimension 200 -epochs 25 -window 5`
+* `cp ./data/ilpc_rebel/ilpc_rebel.txt.gz ./data/ilpc_joint2vec`
+* `java -Xmx200g -jar jrdf2vec-1.3-SNAPSHOT.jar -graph ./data/ilpc/raw/large/train_rdf.nt -numberOfWalks 2000 -depth 4 -walkGenerationMode "MID_WALKS" -walkDirectory ./data/ilpc_rdf2vec -dimension 200 -epochs 25 -window 5`
+* `cp ./data/ilpc_rdf2vec/walk_*  ./data/ilpc_joint2vec`
+* `java -Xmx200g -jar jrdf2vec-1.2-SNAPSHOT.jar -onlyTraining -walkDirectory ./data/ilpc_joint2vec -dimension 200 -epochs 25 -window 5`
+
+
+
 
 
 
@@ -44,18 +48,49 @@ with RDF2Vec embeddings that does not need a NN.
 
 
 
-### Run 
-* VectorReconstructionNet `python main.py --dataset fb15k --architecture VectorReconstructionNet --relationfeatures derived`
-* ClassicLinkPredNet `python main.py --dataset fb15k --architecture ClassicLinkPredNet --relationfeatures derived`
+## Run 
+## FB15k
+* `nohup python main.py --dataset fb15k --architecture VectorReconstructionNet --relationfeatures derived --bs 1000 > ./data/fb15k_vr_der.out &`
+* `nohup python main.py --dataset fb15k --architecture VectorReconstructionNet --relationfeatures standard --bs 1000 > ./data/fb15k_vr_std.out &`
+* `nohup python main.py --dataset fb15k --architecture ClassicLinkPredNet --relationfeatures derived --bs 128 > ./data/fb15k_clp_der.out &`
+* `nohup python main.py --dataset fb15k --architecture ClassicLinkPredNet --relationfeatures standard --bs 128 > ./data/fb15k_clp_std.out &`
+
+## FB15k-237
+* `nohup python main.py --dataset fb15k-237 --architecture VectorReconstructionNet --relationfeatures derived --bs 1000 > ./data/fb15k-237_vr_der.out &`
+* `nohup python main.py --dataset fb15k-237 --architecture VectorReconstructionNet --relationfeatures standard --bs 1000 > ./data/fb15k-237_vr_std.out &`
+* `nohup python main.py --dataset fb15k-237 --architecture ClassicLinkPredNet --relationfeatures derived --bs 128 > ./data/fb15k-237_clp_der.out &`
+* `nohup python main.py --dataset fb15k-237 --architecture ClassicLinkPredNet --relationfeatures standard --bs 128 > ./data/fb15k-237_clp_std.out &`
+
+## ILPC 
+* `nohup python main.py --dataset ilpc --architecture VectorReconstructionNet --bs 1000 --wv ilpc_rebel > ./data/ilpc_vr_rebel.out &`
+* `nohup python main.py --dataset ilpc --architecture VectorReconstructionNet --bs 1000 --wv ilpc_joint2vec > ./data/ilpc_vr_joint.out &`
 
 
-nohup python main.py --dataset fb15k --architecture VectorReconstructionNet --relationfeatures derived --bs 1000 > ./data/fb15k_vr_der.out &
-nohup python main.py --dataset fb15k --architecture VectorReconstructionNet --relationfeatures standard --bs 1000 > ./data/fb15k_vr_std.out &
-nohup python main.py --dataset fb15k --architecture ClassicLinkPredNet --relationfeatures derived --bs 128 > ./data/fb15k_clp_der.out &
-nohup python main.py --dataset fb15k --architecture ClassicLinkPredNet --relationfeatures standard --bs 128 > ./data/fb15k_clp_std.out &
+
+## Results
+
+### FB15k
+| Models                  | Edge Features | MR        | MRR    | Hits@10 | Hits@3 | Hits@1 |
+|-------------------------|---------------|-----------|--------|---------|--------|--------|
+| VectorReconstructionNet | derived       | 480.6240  | 0.2720 | 0.410   |        |        |
+| VectorReconstructionNet | standard      | 480.3071  | 0.2690 | 0.408   |        |        |
+| ClassicLinkPredNet      | derived       | 144.7472  | 0.2091 | 0.432   |        |        |
+| ClassicLinkPredNet      | standard      | 146.0196  | 0.2043 | 0.414   |        |        |
 
 
-nohup python main.py --dataset fb15k-237 --architecture VectorReconstructionNet --relationfeatures derived --bs 1000 > ./data/fb15k-237_vr_der.out &
-nohup python main.py --dataset fb15k-237 --architecture VectorReconstructionNet --relationfeatures standard --bs 1000 > ./data/fb15k-237_vr_std.out &
-nohup python main.py --dataset fb15k-237 --architecture ClassicLinkPredNet --relationfeatures derived --bs 128 > ./data/fb15k-237_clp_der.out &
-nohup python main.py --dataset fb15k-237 --architecture ClassicLinkPredNet --relationfeatures standard --bs 128 > ./data/fb15k-237_clp_std.out &
+
+### FB15k-237
+| Models                  | Edge Features | MR        | MRR    | Hits@10 | Hits@3 | Hits@1 |
+|-------------------------|---------------|-----------|--------|---------|--------|--------|
+| VectorReconstructionNet | derived       | 1146.7583 | 0.2054 | 0.281   | 0.222  | 0.162  |
+| VectorReconstructionNet | standard      | 1153.2833 | 0.2083 | 0.286   | 0.226  | 0.165  |
+| ClassicLinkPredNet      | derived       | 427.9076  | 0.1228 | 0.258   | 0.127  | 0.057  |
+| ClassicLinkPredNet      | standard      | 419.6589  | 0.1172 | 0.252   | 0.119  | 0.053  |
+
+
+
+
+
+
+
+
