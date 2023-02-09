@@ -2,6 +2,11 @@ import argparse
 import os
 import os.path as osp
 import json
+
+from datetime import datetime
+from ray import air, tune
+from ray.tune import Tuner, ExperimentAnalysis, CLIReporter
+from ray.tune.schedulers import ASHAScheduler
 from tqdm import tqdm
 import numpy as np
 import time
@@ -11,11 +16,11 @@ from gensim.models import Word2Vec
 from torch_geometric.data import Data
 from torch.nn import CosineEmbeddingLoss, MSELoss, BCELoss
 
-from models import VectorReconstructionNet, ClassicLinkPredNet
+from models import VectorReconstructionNet, ClassicLinkPredNet, DistMultNet, ComplExNet
 
 EMBEDDING_DIM = 200
 # DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-DEVICE = torch.device('cuda:1')
+
 
 
 def read_lp_data(path, entities, relations, data_sample, wv_model, relation_embeddings=False):
@@ -113,7 +118,7 @@ def negative_sampling(edge_index, num_nodes):
     return neg_edge_index
 
 
-def train_triple_scoring(model, optimizer):
+def train_triple_scoring(model, optimizer, model_type='ClassicLinkPredNet'):
     start = time.time()
 
     edge_index_batches = torch.split(train_edge_index_t, BATCH_SIZE)
@@ -137,9 +142,17 @@ def train_triple_scoring(model, optimizer):
         head_embeddings_neg = x_entity[edge_idxs_neg[:, 0]]
         tail_embeddings_neg = x_entity[edge_idxs_neg[:, 1]]
 
-        out = torch.reshape(model.forward(torch.cat([head_embeddings_pos, head_embeddings_neg], dim=0),
-                                          torch.cat([relation_embeddings, relation_embeddings], dim=0),
-                                          torch.cat([tail_embeddings_pos, tail_embeddings_neg], dim=0)), (-1,))
+        if model_type in ['ClassicLinkPredNet', 'DistMultNet']:
+            out = model.forward(torch.cat([head_embeddings_pos, head_embeddings_neg], dim=0),
+                                torch.cat([relation_embeddings, relation_embeddings], dim=0),
+                                torch.cat([tail_embeddings_pos, tail_embeddings_neg], dim=0))
+        if model_type == 'ComplExNet':
+            out = model.forward(torch.cat([head_embeddings_pos, head_embeddings_neg], dim=0),
+                                torch.cat([relation_embeddings, relation_embeddings], dim=0),
+                                torch.cat([tail_embeddings_pos, tail_embeddings_neg], dim=0),
+                                torch.cat([edge_idxs[:, 0], edge_idxs_neg[:, 0]], dim=0),
+                                torch.cat([relation_idx, relation_idx], dim=0),
+                                torch.cat([edge_idxs[:, 1], edge_idxs_neg[:, 1]], dim=0))
 
         # classification target: first for true, then for corrupted triples
         gt = torch.cat([torch.ones(len(relation_idx)), torch.zeros(len(relation_idx))], dim=0).to(DEVICE)
@@ -155,7 +168,7 @@ def train_triple_scoring(model, optimizer):
 
 @torch.no_grad()
 def compute_mrr_triple_scoring(model, eval_edge_index, eval_edge_type,
-                               fast=False, entities_idx=None):
+                               fast=False, entities_idx=None, model_type='ClassicLinkPredNet'):
 
     if entities_idx:
         # inverse relevant_entities_idx
@@ -164,7 +177,6 @@ def compute_mrr_triple_scoring(model, eval_edge_index, eval_edge_type,
         mask[entities_idx] = False
         not_relevant_entities_idx = torch.range(0, num_entities - 1, dtype=torch.int)[~mask]
 
-    # todo implement inductive link prediction evaluation - restrict to relevant entities
     ranks = []
     num_samples = eval_edge_type.numel() if not fast else 5000
     for triple_index in tqdm(range(num_samples)):
@@ -190,7 +202,11 @@ def compute_mrr_triple_scoring(model, eval_edge_index, eval_edge_type,
         h = x_entity[head]
         r = x_relation[eval_edge_typ_tensor]
         t = x_entity[tail]
-        out = model.forward(h, r, t)
+        if model_type in ['ClassicLinkPredNet', 'DistMultNet']:
+            out = model.forward(h, r, t)
+        if model_type == 'ComplExNet':
+            out = model.forward(h, r, t, head.to(DEVICE), eval_edge_typ_tensor.to(DEVICE), tail.to(DEVICE))
+
 
         rank = compute_rank(out)
         ranks.append(rank)
@@ -215,7 +231,11 @@ def compute_mrr_triple_scoring(model, eval_edge_index, eval_edge_type,
         h = x_entity[head]
         r = x_relation[eval_edge_typ_tensor]
         t = x_entity[tail]
-        out = model.forward(h, r, t)
+
+        if model_type in ['ClassicLinkPredNet', 'DistMultNet']:
+            out = model.forward(h, r, t)
+        if model_type == 'ComplExNet':
+            out = model.forward(h, r, t, head.to(DEVICE), eval_edge_typ_tensor.to(DEVICE), tail.to(DEVICE))
 
         rank = compute_rank(out)
         ranks.append(rank)
@@ -241,7 +261,7 @@ def compute_rank(ranks):
 
 @torch.no_grad()
 def compute_mrr_vector_reconstruction(model_tail_pred, model_head_pred, entity_features, relation_features, edge_index,
-                                      edge_type, fast=False, inductive=False, entities_idx=None):
+                                      edge_type, fast=False, entities_idx=None):
     """
 
     :param model_tail_pred:
@@ -355,13 +375,18 @@ def get_ilpc_entities_relations():
     return list(entities_ilpc), list(relations_ilpc), list(entities_ilpc_train), list(entitites_ilpc_inference)
 
 
+# todo implement for ray
+def train(config):
+    pass
+
+
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='rdf2vec link prediction')
     # specify dataset
     parser.add_argument('--dataset', type=str, default='fb15k', help='fb15k or fb15-237 or ilpc')
     parser.add_argument('--architecture', type=str, default='ClassicLinkPredNet',
-                        help="ClassicLinkPredNet or VectorReconstructionNet")
+                        help="ClassicLinkPredNet or VectorReconstructionNet or DistMultNet or ComplExNet")
     parser.add_argument('--relationfeatures', type=str, default='standard',
                         help="standard (use the ones trained by RDF2Vec) or derived (derive them form the entity features automatically)")
     parser.add_argument('--lr', type=float, default=.001, help="learning rate")
@@ -369,6 +394,9 @@ if __name__ == '__main__':
     parser.add_argument('--hidden', type=int, default=200, help="hidden dim")
     parser.add_argument('--wv', type=str, default='ilpc_rebel',
                         help="only for ilpc: ilpc_rebel or ilpc_joint2vec or ilpc_hybrid2vec")
+
+    parser.add_argument('--device', type=str, default='cpu',
+                        help="cpu, cuda, cuda:0, cuda:1")
 
     args = parser.parse_args()
     dataset = args.dataset
@@ -378,6 +406,9 @@ if __name__ == '__main__':
     lr = args.lr
     BATCH_SIZE = args.bs  # 1000
     HIDDEN_DIM = args.hidden
+    run_name = 'rdf2vec_link_pred' + datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+    DEVICE = torch.device(args.device)
 
     # only required for inductive link prediction
     entities_train_idx = None
@@ -398,6 +429,8 @@ if __name__ == '__main__':
         relations = list(relations)
 
         num_entities = len(entities)
+
+        print('num_entities:', num_entities)
 
         # load RDF2Vec models for features
         wv_model = Word2Vec.load(f'./data/{dataset}_rdf2vec/model')
@@ -479,22 +512,39 @@ if __name__ == '__main__':
     test_edge_index = data_test.edge_index.to(DEVICE)
     test_edge_type = data_test.edge_type.to(DEVICE)
 
-    # ClassicLinkPredNet
-    if architecture == 'ClassicLinkPredNet':
-        model = ClassicLinkPredNet(EMBEDDING_DIM, HIDDEN_DIM)
+    # ClassicLinkPredNet or DistMultNet
+    if architecture in ['ClassicLinkPredNet', 'DistMultNet', 'ComplExNet']:
+        # todo implement ray hyperparameter optimization
+        search_space = {
+            "lr": tune.loguniform(1e-5, 1e-3),
+            "bs": tune.grid_search([32, 64, 128]),  # batch size
+            "rel_dim": tune.grid_search([50, 100]),
+            "hid_dim": tune.grid_search([50, 100, 200, 300, 400]),
+            "num_hid_lay": tune.grid_search([1, 2, 3, 4]),
+            "wandb": {"project": run_name},
+        }
+
+
+        if architecture == 'ClassicLinkPredNet':
+            model = ClassicLinkPredNet(EMBEDDING_DIM, HIDDEN_DIM)
+        if architecture == 'DistMultNet':
+            model = DistMultNet(EMBEDDING_DIM, HIDDEN_DIM)
+        if architecture == 'ComplExNet':
+            model = ComplExNet(EMBEDDING_DIM, HIDDEN_DIM, num_entities, len(relations))
         model.to(DEVICE)
         loss_function = torch.nn.BCELoss()  # torch.nn.MSELoss()
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)  # , weight_decay=1e-4
         model.train()
 
         for epoch in range(0, 1000):
-            train_triple_scoring(model, optimizer)
+            train_triple_scoring(model, optimizer, model_type=architecture)
             if epoch % 50 == 0:
                 mrr, mr, hits10, hits5, hits3, hits1 = compute_mrr_triple_scoring(model,
                                                                                   val_edge_index,
                                                                                   val_edge_type,
                                                                                   fast=True,
-                                                                                  entities_idx=entities_inference_idx)
+                                                                                  entities_idx=entities_inference_idx,
+                                                                                  model_type=architecture)
                 print('mrr:', mrr, 'mr:', mr, 'hits@10:', hits10, 'hits@5:', hits5, 'hits@3:', hits3, 'hits@1:', hits1)
 
         torch.save(model.state_dict(), 'model_ClassicLinkPredNet.pt')
@@ -535,7 +585,6 @@ if __name__ == '__main__':
                                                                                          data_val.edge_index,
                                                                                          data_val.edge_type,
                                                                                          fast=True,
-                                                                                         inductive=inductive,
                                                                                          entities_idx=entities_inference_idx)
                 print('mrr:', mrr, 'mr:', mr, 'hits@10:', hits10, 'hits@5:', hits5, 'hits@3:', hits3, 'hits@1:', hits1)
 
@@ -546,7 +595,6 @@ if __name__ == '__main__':
                                                                                  data_val.edge_index,
                                                                                  data_val.edge_type,
                                                                                  fast=False,
-                                                                                 inductive=inductive,
                                                                                  entities_idx=entities_inference_idx)
         print('val mrr:', mrr, 'mr:', mr, 'hits@10:', hits10, 'hits@5:', hits5, 'hits@3:', hits3, 'hits@1:', hits1)
         mrr, mr, hits10, hits5, hits3, hits1 = compute_mrr_vector_reconstruction(model_tail_pred,
@@ -556,7 +604,6 @@ if __name__ == '__main__':
                                                                                  data_test.edge_index,
                                                                                  data_test.edge_type,
                                                                                  fast=False,
-                                                                                 inductive=inductive,
                                                                                  entities_idx=entities_inference_idx)
         print('test mrr:', mrr, 'mr:', mr, 'hits@10:', hits10, 'hits@5:', hits5, 'hits@3:', hits3, 'hits@1:', hits1)
         torch.save(model_tail_pred.state_dict(), 'model_VectorReconstructionNet_tail_pred.pt')
