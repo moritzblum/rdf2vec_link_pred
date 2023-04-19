@@ -52,48 +52,54 @@ with RDF2Vec embeddings that does not need a NN.
 ## FB15k
 * `nohup python -u main.py --dataset fb15k --architecture VectorReconstructionNet --relationfeatures derived --bs 1000 --device cuda:0 > ./data/fb15k_vr_der.out &`
 * `nohup python -u main.py --dataset fb15k --architecture VectorReconstructionNet --relationfeatures standard --bs 1000 --device cuda:0 > ./data/fb15k_vr_std.out &`
-* `nohup python -u main.py --dataset fb15k --architecture ClassicLinkPredNet --relationfeatures derived --bs 128 --device cuda:0 > ./data/fb15k_clp_der.out &`
+* `nohup python -u main.py --dataset fb15k --architecture ClassicLinkPredNet --relationfeatures derived --bs 128 --device cuda:0 --lr .0001 > ./data/fb15k_clp_der.out &`
 * `nohup python -u main.py --dataset fb15k --architecture ClassicLinkPredNet --relationfeatures standard --bs 128 --device cuda:0 > ./data/fb15k_clp_std.out &`
+* `nohup python -u main.py --dataset fb15k --architecture DistMultNet --relationfeatures standard --bs 128 --device cuda:1 > ./data/fb15k_dm_std.out &`
+* `nohup python -u main.py --dataset fb15k --architecture DistMultNet --relationfeatures derived --bs 128 --device cuda:1  > ./data/fb15k_dm_der.out &`
+* `nohup python -u main.py --dataset fb15k --architecture ComplExNet --relationfeatures standard --bs 128 --device cuda:1 > ./data/fb15k_cp_std.out &`
+* `nohup python -u main.py --dataset fb15k --architecture ComplExNet --relationfeatures derived --bs 128 --device cuda:0 > ./data/fb15k_cp_der.out &`
 
-* `nohup python -u main.py --dataset fb15k --architecture DistMultNet --relationfeatures standard --bs 128 --hidden 100 --device cuda:0 > ./data/fb15k_dm_std.out &`
-* `nohup python -u main.py --dataset fb15k --architecture DistMultNet --relationfeatures derived --bs 128 --hidden 100 --device cuda:0 > ./data/fb15k_dm_der.out &`
 
-* `nohup python -u main.py --dataset fb15k --architecture ComplExNet --relationfeatures standard --bs 128 --hidden 100 --device cuda:0 > ./data/fb15k_cp_std.out &`
-
+* `nohup python -u main.py --dataset fb15k --architecture DistMultNet --relationfeatures standard --bs 128 --device cuda:1 --batchnorm > ./data/fb15k_dm_std_bn.out &`
+* `nohup python -u main.py --dataset fb15k --architecture DistMultNet --relationfeatures derived --bs 128 --device cuda:1  --batchnorm > ./data/fb15k_dm_der_bn.out &`
+* `nohup python -u main.py --dataset fb15k --architecture ComplExNet --relationfeatures standard --bs 128 --device cuda:0 --batchnorm > ./data/fb15k_cp_std_bn.out &`
+* `nohup python -u main.py --dataset fb15k --architecture ComplExNet --relationfeatures derived --bs 128 --device cuda:0 --batchnorm > ./data/fb15k_cp_der_bn.out &`
 
 
 
 ## FB15k-237
-* `nohup python -u main.py --dataset fb15k-237 --architecture VectorReconstructionNet --relationfeatures derived --bs 1000 --device cuda:0 > ./data/fb15k-237_vr_der.out &`
+* `nohup python -u main.py --dataset fb15k-237 --architecture VectorReconstructionNet --relationfeatures derived --bs 1000 --device cuda:0 > ./data/fb15k-237_vr_der.out &` -> histogram 
 * `nohup python -u main.py --dataset fb15k-237 --architecture VectorReconstructionNet --relationfeatures standard --bs 1000 --device cuda:0 > ./data/fb15k-237_vr_std.out &`
-* `nohup python -u main.py --dataset fb15k-237 --architecture ClassicLinkPredNet --relationfeatures derived --bs 128 --device cuda:0 > ./data/fb15k-237_clp_der.out &`
+* `nohup python -u main.py --dataset fb15k-237 --architecture ClassicLinkPredNet --relationfeatures derived --bs 128 --device cuda:0 > ./data/fb15k-237_clp_der.out &` -> histogram 
 * `nohup python -u main.py --dataset fb15k-237 --architecture ClassicLinkPredNet --relationfeatures standard --bs 128 --device cuda:0 > ./data/fb15k-237_clp_std.out &`
 
 ## ILPC 
 * `nohup python -u main.py --dataset ilpc --architecture VectorReconstructionNet --bs 1000 --wv ilpc_rebel --device cuda:0 > ./data/ilpc_vr_rebel.out &`
 * `nohup python -u main.py --dataset ilpc --architecture VectorReconstructionNet --bs 1000 --wv ilpc_joint2vec --device cuda:0 > ./data/ilpc_vr_joint.out &`
+* `nohup python -u main.py --dataset ilpc --architecture ClassicLinkPredNet --bs 1000 --wv ilpc_joint2vec --device cuda:0 > ./data/ilpc_vr_joint.out &`
 
 
 
 ## Results
 
+
 ### FB15k
-| Models                  | Edge Features | MR         | MRR    | Hits@10 | Hits@3 | Hits@1 |
-|-------------------------|---------------|------------|--------|---------|--------|--------|
-| VectorReconstructionNet | derived       | 480.6240   | 0.2720 | 0.410   |        |        |
-| VectorReconstructionNet | standard      | 480.3071   | 0.2690 | 0.408   |        |        |
-| ClassicLinkPredNet      | derived       | 144.7472   | 0.2091 | 0.432   |        |        |
-| ClassicLinkPredNet      | standard      | 146.0196 y | 0.2043 | 0.414   |        |        |
+| Models                  | Batch Norm. | Edge Features | MR        | MRR    | Hits@10 | Hits@3 | Hits@1 |
+|-------------------------|-------------|---------------|-----------|--------|---------|--------|--------|
+| VectorReconstructionNet | false       | derived       | 482.4171  | 0.2710 | 0.409   | 0.296  | 0.1971 |
+| VectorReconstructionNet | false       | standard      | 481.3459  | 0.2705 | 0.411   | 0.297  | 0.196  |
+| ClassicLinkPredNet      | false       | derived       | 147.4021  | 0.2036 | 0.420   | 0.224  | 0.101  |
+| ClassicLinkPredNet      | false       | standard      | 160.4563  | 0.1742 | 0.357   | 0.186  | 0.086  |
 
 
 
 ### FB15k-237
-| Models                  | Edge Features | MR        | MRR    | Hits@10 | Hits@3 | Hits@1 |
-|-------------------------|---------------|-----------|--------|---------|--------|--------|
-| VectorReconstructionNet | derived       | 1146.7583 | 0.2054 | 0.281   | 0.222  | 0.162  |
-| VectorReconstructionNet | standard      | 1153.2833 | 0.2083 | 0.286   | 0.226  | 0.165  |
-| ClassicLinkPredNet      | derived       | 427.9076  | 0.1228 | 0.258   | 0.127  | 0.057  |
-| ClassicLinkPredNet      | standard      | 419.6589  | 0.1172 | 0.252   | 0.119  | 0.053  |
+| Models                  | Batch Norm. | Edge Features  | MR        | MRR    | Hits@10 | Hits@3 | Hits@1 |
+|-------------------------|-------------|----------------|-----------|--------|---------|--------|--------|
+| VectorReconstructionNet | false       | derived        | 1146.7583 | 0.2054 | 0.281   | 0.222  | 0.162  |-> histogram
+| VectorReconstructionNet | false       | standard       | 1153.2833 | 0.2083 | 0.286   | 0.226  | 0.165  |
+| ClassicLinkPredNet      | false       | derived        | 427.9076  | 0.1228 | 0.258   | 0.127  | 0.057  |-> histogram
+| ClassicLinkPredNet      | false       | standard       | 419.6589  | 0.1172 | 0.252   | 0.119  | 0.053  |
 
 
 

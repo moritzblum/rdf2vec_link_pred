@@ -36,7 +36,7 @@ def reformat_rebel():
 
 
 if __name__ == '__main__':
-    reformat_lp_dataset('fb15k')
-    reformat_lp_dataset('fb15k-237')
-    reformat_lp_dataset('ilpc/raw/large')
+    #reformat_lp_dataset('fb15k')
+    #reformat_lp_dataset('fb15k-237')
+    #reformat_lp_dataset('ilpc/raw/large')
     reformat_rebel()

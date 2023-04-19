@@ -2,8 +2,11 @@ import argparse
 import os
 import os.path as osp
 import json
+import matplotlib.pyplot as plt
 
 from datetime import datetime
+
+import wandb
 from ray import air, tune
 from ray.tune import Tuner, ExperimentAnalysis, CLIReporter
 from ray.tune.schedulers import ASHAScheduler
@@ -19,8 +22,9 @@ from torch.nn import CosineEmbeddingLoss, MSELoss, BCELoss
 from models import VectorReconstructionNet, ClassicLinkPredNet, DistMultNet, ComplExNet
 
 EMBEDDING_DIM = 200
-# DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+
+# DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 def read_lp_data(path, entities, relations, data_sample, wv_model, relation_embeddings=False):
@@ -98,27 +102,28 @@ def train_vector_reconstruction(model, optimizer, entity_input='head'):
             optimizer.step()
 
     end = time.time()
-    print('esapsed time:', end - start)
-    print('loss:', loss_total / len(edge_index_batches))
+    # print('esapsed time:', end - start)
+    # print('loss:', loss_total / len(edge_index_batches))
     return (loss_total)
 
 
-def negative_sampling(edge_index, num_nodes):
+def negative_sampling(edge_index, num_nodes, eta=1):
     # Sample edges by corrupting either the subject or the object of each edge.
-    mask_1 = torch.rand(edge_index.size(0)) < 0.5
+    mask_1 = torch.rand(edge_index.size(0) * eta) < 0.5
     mask_2 = ~mask_1
 
     mask_1 = mask_1.to(DEVICE)
     mask_2 = mask_2.to(DEVICE)
 
-    neg_edge_index = edge_index.clone()
+    neg_edge_index = edge_index.clone().repeat(eta, 1)
     neg_edge_index[mask_1, 0] = torch.randint(num_nodes, (1, mask_1.sum()), device=DEVICE)
     neg_edge_index[mask_2, 1] = torch.randint(num_nodes, (1, mask_2.sum()), device=DEVICE)
 
     return neg_edge_index
 
 
-def train_triple_scoring(model, optimizer, model_type='ClassicLinkPredNet'):
+def train_triple_scoring(model, optimizer, model_type='ClassicLinkPredNet', eta=1):
+    model.train()
     start = time.time()
 
     edge_index_batches = torch.split(train_edge_index_t, BATCH_SIZE)
@@ -137,14 +142,14 @@ def train_triple_scoring(model, optimizer, model_type='ClassicLinkPredNet'):
         head_embeddings_pos = x_entity[edge_idxs[:, 0]]
         tail_embeddings_pos = x_entity[edge_idxs[:, 1]]
 
-        edge_idxs_neg = negative_sampling(edge_idxs, num_entities)
+        edge_idxs_neg = negative_sampling(edge_idxs, num_entities, eta=5)
 
         head_embeddings_neg = x_entity[edge_idxs_neg[:, 0]]
         tail_embeddings_neg = x_entity[edge_idxs_neg[:, 1]]
 
         if model_type in ['ClassicLinkPredNet', 'DistMultNet']:
             out = model.forward(torch.cat([head_embeddings_pos, head_embeddings_neg], dim=0),
-                                torch.cat([relation_embeddings, relation_embeddings], dim=0),
+                                torch.cat([relation_embeddings, relation_embeddings.repeat(eta, 1)], dim=0),
                                 torch.cat([tail_embeddings_pos, tail_embeddings_neg], dim=0))
         if model_type == 'ComplExNet':
             out = model.forward(torch.cat([head_embeddings_pos, head_embeddings_neg], dim=0),
@@ -155,27 +160,29 @@ def train_triple_scoring(model, optimizer, model_type='ClassicLinkPredNet'):
                                 torch.cat([edge_idxs[:, 1], edge_idxs_neg[:, 1]], dim=0))
 
         # classification target: first for true, then for corrupted triples
-        gt = torch.cat([torch.ones(len(relation_idx)), torch.zeros(len(relation_idx))], dim=0).to(DEVICE)
+        gt = torch.cat([torch.ones(len(relation_idx)), torch.zeros(len(relation_idx) * eta)], dim=0).to(DEVICE)
 
         loss = loss_function(out, gt)
         loss_total += loss
         loss.backward()
         optimizer.step()
     end = time.time()
-    print('esapsed time:', end - start)
-    print('loss:', loss_total / len(edge_index_batches))
+    # print('esapsed time:', end - start)
+    # print('loss:', loss_total / len(edge_index_batches))
 
 
 @torch.no_grad()
 def compute_mrr_triple_scoring(model, eval_edge_index, eval_edge_type,
                                fast=False, entities_idx=None, model_type='ClassicLinkPredNet'):
-
+    model.eval()
     if entities_idx:
+        print('inductive link prediction setting')
         # inverse relevant_entities_idx
         entities_idx = torch.tensor(entities_idx)
         mask = torch.ones(num_entities, dtype=torch.bool)
         mask[entities_idx] = False
         not_relevant_entities_idx = torch.range(0, num_entities - 1, dtype=torch.int)[~mask]
+        not_relevant_entities_idx = not_relevant_entities_idx.long()
 
     ranks = []
     num_samples = eval_edge_type.numel() if not fast else 5000
@@ -191,7 +198,7 @@ def compute_mrr_triple_scoring(model, eval_edge_index, eval_edge_type,
         ]:
             tail_mask[tails[(heads == src) & (types == rel)]] = False
 
-        if entities_idx:
+        if entities_idx != None:
             tail_mask[not_relevant_entities_idx] = False
 
         tail = torch.arange(num_entities)[tail_mask]
@@ -207,7 +214,6 @@ def compute_mrr_triple_scoring(model, eval_edge_index, eval_edge_type,
         if model_type == 'ComplExNet':
             out = model.forward(h, r, t, head.to(DEVICE), eval_edge_typ_tensor.to(DEVICE), tail.to(DEVICE))
 
-
         rank = compute_rank(out)
         ranks.append(rank)
 
@@ -220,7 +226,7 @@ def compute_mrr_triple_scoring(model, eval_edge_index, eval_edge_type,
         ]:
             head_mask[heads[(tails == dst) & (types == rel)]] = False
 
-        if entities_idx:
+        if entities_idx != None:
             head_mask[not_relevant_entities_idx] = False
 
         head = torch.arange(num_entities)[head_mask]
@@ -245,7 +251,7 @@ def compute_mrr_triple_scoring(model, eval_edge_index, eval_edge_type,
     return (1. / ranks).mean(), ranks.mean(), ranks[ranks <= 10].size(0) / num_ranks, \
            ranks[ranks <= 5].size(0) / num_ranks, \
            ranks[ranks <= 3].size(0) / num_ranks, \
-           ranks[ranks <= 1].size(0) / num_ranks
+           ranks[ranks <= 1].size(0) / num_ranks, ranks
 
 
 @torch.no_grad()
@@ -275,17 +281,21 @@ def compute_mrr_vector_reconstruction(model_tail_pred, model_head_pred, entity_f
     :param inductive:
     :return:
     """
+    model_tail_pred.eval()
+    model_head_pred.eval()
     if entities_idx:
         # inverse relevant_entities_idx
         entities_idx = torch.tensor(entities_idx)
         mask = torch.ones(num_entities, dtype=torch.bool)
         mask[entities_idx] = False
         not_relevant_entities_idx = torch.range(0, num_entities - 1, dtype=torch.int)[~mask]
+        not_relevant_entities_idx = not_relevant_entities_idx.long()
 
     eval_loss_function = MSELoss(reduction='none')  # CosineEmbeddingLoss(reduction='none')
 
     num_samples = edge_type.numel() if not fast else 5000
-    ranks = []
+    ranks = {'head_pred': [], 'tail_pred': []}
+
     for i in tqdm(range(num_samples)):
         (src, dst), rel = edge_index[:, i], edge_type[i]
 
@@ -301,7 +311,7 @@ def compute_mrr_vector_reconstruction(model_tail_pred, model_head_pred, entity_f
         ]:
             tail_mask[tails[(heads == src) & (types == rel)]] = False
 
-        if entities_idx:
+        if entities_idx != None:
             tail_mask[not_relevant_entities_idx] = False
 
         tail = torch.arange(num_entities)[tail_mask]
@@ -314,7 +324,7 @@ def compute_mrr_vector_reconstruction(model_tail_pred, model_head_pred, entity_f
         out = eval_loss_function(out, tail_features)  # , -torch.ones(len(tail)).to(DEVICE))
         out = - torch.mean(out, dim=1)  # added for MSE loss
         rank = compute_rank(out)
-        ranks.append(rank)
+        ranks['tail_pred'].append(rank)
 
         out_model = model_head_pred(torch.reshape(entity_features[dst], (1, EMBEDDING_DIM)).float().to(DEVICE),
                                     torch.reshape(relation_features[rel], (1, EMBEDDING_DIM)).float().to(DEVICE))
@@ -328,7 +338,7 @@ def compute_mrr_vector_reconstruction(model_tail_pred, model_head_pred, entity_f
         ]:
             head_mask[heads[(tails == dst) & (types == rel)]] = False
 
-        if entities_idx:
+        if entities_idx != None:
             head_mask[not_relevant_entities_idx] = False
 
         head = torch.arange(num_entities)[head_mask]
@@ -341,14 +351,15 @@ def compute_mrr_vector_reconstruction(model_tail_pred, model_head_pred, entity_f
         out = - torch.mean(out, dim=1)  # added for MSE loss
 
         rank = compute_rank(out)
-        ranks.append(rank)
+        ranks['head_pred'].append(rank)
 
-    num_ranks = len(ranks)
-    ranks = torch.tensor(ranks, dtype=torch.float)
-    return (1. / ranks).mean(), ranks.mean(), ranks[ranks <= 10].size(0) / num_ranks, \
-           ranks[ranks <= 5].size(0) / num_ranks, \
-           ranks[ranks <= 3].size(0) / num_ranks, \
-           ranks[ranks <= 1].size(0) / num_ranks
+    num_ranks = len(ranks['head_pred'] + ranks['tail_pred'])
+    ranks_all = torch.tensor(ranks['head_pred'] + ranks['tail_pred'], dtype=torch.float)
+    return (1. / ranks_all).mean(), ranks_all.mean(), ranks_all[ranks_all <= 10].size(0) / num_ranks, \
+           ranks_all[ranks_all <= 5].size(0) / num_ranks, \
+           ranks_all[ranks_all <= 3].size(0) / num_ranks, \
+           ranks_all[ranks_all <= 1].size(0) / num_ranks, ranks_all, torch.tensor(ranks['tail_pred']), torch.tensor(
+        ranks['head_pred'])
 
 
 def get_ilpc_entities_relations():
@@ -380,6 +391,17 @@ def train(config):
     pass
 
 
+def log_results(model_name, mrr, mr, hits1, hits3, hits10):
+    logfile = 'data/logs.txt'
+    if os.path.exists(logfile):
+        append_write = 'a'  # append if already exists
+    else:
+        append_write = 'w'  # make a new file if not
+
+    with open(logfile, append_write) as logs_out:
+        logs_out.write(f'{model_name}, {mrr}, {mr}, {hits1}, {hits3}, {hits10} \n')
+
+
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='rdf2vec link prediction')
@@ -391,12 +413,20 @@ if __name__ == '__main__':
                         help="standard (use the ones trained by RDF2Vec) or derived (derive them form the entity features automatically)")
     parser.add_argument('--lr', type=float, default=.001, help="learning rate")
     parser.add_argument('--bs', type=int, default=1000, help="learning rate")
-    parser.add_argument('--hidden', type=int, default=200, help="hidden dim")
-    parser.add_argument('--wv', type=str, default='ilpc_rebel',
+    parser.add_argument('--hidden', type=int, default=100, help="hidden dim")
+    parser.add_argument('--wv', type=str, default='ilpc_rebel or one-hot',
                         help="only for ilpc: ilpc_rebel or ilpc_joint2vec or ilpc_hybrid2vec")
 
     parser.add_argument('--device', type=str, default='cpu',
                         help="cpu, cuda, cuda:0, cuda:1")
+
+    parser.add_argument('--batchnorm', action='store_true')
+    parser.set_defaults(batchnorm=False)
+
+    parser.add_argument('--load', action='store_true')
+    parser.set_defaults(batchnorm=False)
+
+    parser.add_argument('--dropout', type=int, default=0)
 
     args = parser.parse_args()
     dataset = args.dataset
@@ -404,9 +434,17 @@ if __name__ == '__main__':
     architecture = args.architecture
     relation_embeddings = True if args.relationfeatures == 'standard' else False
     lr = args.lr
-    BATCH_SIZE = args.bs  # 1000
+    BATCH_SIZE = args.bs  # default 1000
     HIDDEN_DIM = args.hidden
     run_name = 'rdf2vec_link_pred' + datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    wv_type = args.wv
+    batch_norm = args.batchnorm
+    dropout = args.dropout
+    load_trained_model = args.load
+
+    # create model name for storing/loading trained models
+    model_name = f'model_{architecture}_{args.relationfeatures}_bs{BATCH_SIZE}_hidden{HIDDEN_DIM}_bn{batch_norm}_d{dropout}'
+    print('model name:', model_name)
 
     DEVICE = torch.device(args.device)
 
@@ -458,7 +496,6 @@ if __name__ == '__main__':
         data_test = torch.load(f'./data/{dataset}/test.pt')
 
     if dataset == 'ilpc':
-        wv_type = args.wv
 
         # start loading data
         entities_ilpc, relations_ilpc, entities_ilpc_train, entitites_ilpc_inference = get_ilpc_entities_relations()
@@ -512,8 +549,11 @@ if __name__ == '__main__':
     test_edge_index = data_test.edge_index.to(DEVICE)
     test_edge_type = data_test.edge_type.to(DEVICE)
 
+    mrr_history = {'epoch': [], 'train': [], 'val': []}
+
     # ClassicLinkPredNet or DistMultNet
     if architecture in ['ClassicLinkPredNet', 'DistMultNet', 'ComplExNet']:
+
         # todo implement ray hyperparameter optimization
         search_space = {
             "lr": tune.loguniform(1e-5, 1e-3),
@@ -524,48 +564,79 @@ if __name__ == '__main__':
             "wandb": {"project": run_name},
         }
 
-
         if architecture == 'ClassicLinkPredNet':
-            model = ClassicLinkPredNet(EMBEDDING_DIM, HIDDEN_DIM)
+            model = ClassicLinkPredNet(EMBEDDING_DIM, HIDDEN_DIM, batch_norm=False, dropout=dropout)
         if architecture == 'DistMultNet':
-            model = DistMultNet(EMBEDDING_DIM, HIDDEN_DIM)
+            model = DistMultNet(EMBEDDING_DIM, HIDDEN_DIM, batch_norm=True, layers=2)
         if architecture == 'ComplExNet':
-            model = ComplExNet(EMBEDDING_DIM, HIDDEN_DIM, num_entities, len(relations))
+            model = ComplExNet(EMBEDDING_DIM, HIDDEN_DIM, num_entities, len(relations), batch_norm=False)
+
+        if load_trained_model:
+            print('loaded trained models')
+            model.load_state_dict(torch.load(f'data/{model_name}.pt'))
+
         model.to(DEVICE)
         loss_function = torch.nn.BCELoss()  # torch.nn.MSELoss()
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)  # , weight_decay=1e-4
         model.train()
 
-        for epoch in range(0, 1000):
-            train_triple_scoring(model, optimizer, model_type=architecture)
-            if epoch % 50 == 0:
-                mrr, mr, hits10, hits5, hits3, hits1 = compute_mrr_triple_scoring(model,
-                                                                                  val_edge_index,
-                                                                                  val_edge_type,
-                                                                                  fast=True,
-                                                                                  entities_idx=entities_inference_idx,
-                                                                                  model_type=architecture)
-                print('mrr:', mrr, 'mr:', mr, 'hits@10:', hits10, 'hits@5:', hits5, 'hits@3:', hits3, 'hits@1:', hits1)
+        for epoch in range(0, 2000):
+            if load_trained_model: break
 
-        torch.save(model.state_dict(), 'model_ClassicLinkPredNet.pt')
-        mrr, mr, hits10, hits5, hits3, hits1 = compute_mrr_triple_scoring(model,
-                                                                          val_edge_index,
-                                                                          val_edge_type,
-                                                                          fast=False,
-                                                                          entities_idx=entities_inference_idx)
+            train_triple_scoring(model, optimizer, model_type=architecture, eta=5)
+            if epoch % 100 == 0:
+                mrr_history['epoch'].append(epoch)
+                val_mrr, mr, hits10, hits5, hits3, hits1, _ = compute_mrr_triple_scoring(model,
+                                                                                         val_edge_index,
+                                                                                         val_edge_type,
+                                                                                         fast=True,
+                                                                                         entities_idx=entities_inference_idx,
+                                                                                         model_type=architecture)
+                print('val mrr:', val_mrr, 'mr:', mr, 'hits@10:', hits10, 'hits@5:', hits5, 'hits@3:', hits3, 'hits@1:',
+                      hits1)
+                mrr_history['val'].append(val_mrr)
+                train_mrr, mr, hits10, hits5, hits3, hits1, _ = compute_mrr_triple_scoring(model,
+                                                                                           data_train.edge_index,
+                                                                                           data_train.edge_type,
+                                                                                           fast=True,
+                                                                                           entities_idx=entities_inference_idx,
+                                                                                           model_type=architecture)
+                print('train mrr:', train_mrr, 'mr:', mr, 'hits@10:', hits10, 'hits@5:', hits5, 'hits@3:', hits3,
+                      'hits@1:',
+                      hits1)
+                mrr_history['train'].append(train_mrr)
+
+        mrr, mr, hits10, hits5, hits3, hits1, _ = compute_mrr_triple_scoring(model,
+                                                                             val_edge_index,
+                                                                             val_edge_type,
+                                                                             fast=False,
+                                                                             entities_idx=entities_inference_idx,
+                                                                             model_type=architecture)
         print('val mrr:', mrr, 'mr:', mr, 'hits@10:', hits10, 'hits@5:', hits5, 'hits@3:', hits3, 'hits@1:', hits1)
-        mrr, mr, hits10, hits5, hits3, hits1 = compute_mrr_triple_scoring(model,
-                                                                          data_test.edge_index,
-                                                                          data_test.edge_type,
-                                                                          fast=False,
-                                                                          entities_idx=entities_inference_idx)
+        mrr, mr, hits10, hits5, hits3, hits1, ranks = compute_mrr_triple_scoring(model,
+                                                                                 data_test.edge_index,
+                                                                                 data_test.edge_type,
+                                                                                 fast=False,
+                                                                                 entities_idx=entities_inference_idx,
+                                                                                 model_type=architecture)
         print('test mrr:', mrr, 'mr:', mr, 'hits@10:', hits10, 'hits@5:', hits5, 'hits@3:', hits3, 'hits@1:', hits1)
+
+        torch.save(model.state_dict(), f'{model_name}.pt')
+        log_results(model_name, mrr, mr, hits1, hits3, hits10)
+
+        with open(f'./data/ranks_{model_name}.json', 'w') as ranks_out:
+            json.dump(ranks.tolist(), ranks_out)
 
     # VectorReconstructionNet
     elif architecture == 'VectorReconstructionNet':
         torch.backends.cudnn.benchmark = True
-        model_tail_pred = VectorReconstructionNet(EMBEDDING_DIM, HIDDEN_DIM)
-        model_head_pred = VectorReconstructionNet(EMBEDDING_DIM, HIDDEN_DIM)
+        model_tail_pred = VectorReconstructionNet(EMBEDDING_DIM, HIDDEN_DIM, dropout=dropout)
+        model_head_pred = VectorReconstructionNet(EMBEDDING_DIM, HIDDEN_DIM, dropout=dropout)
+
+        if load_trained_model:
+            print('loaded trained models')
+            model_tail_pred.load_state_dict(torch.load(f'data/{model_name}_tail_pred.pt'))
+            model_head_pred.load_state_dict(torch.load(f'data/{model_name}_head_pred.pt'))
 
         model_tail_pred.to(DEVICE)
         model_head_pred.to(DEVICE)
@@ -574,37 +645,76 @@ if __name__ == '__main__':
 
         loss_function = MSELoss()  # CosineEmbeddingLoss()
 
-        for epoch in range(1, 5000):
+        for epoch in range(0, 5000):
+            if load_trained_model: break
+
             train_vector_reconstruction(model_tail_pred, optimizer_tail_pred, 'head')
             train_vector_reconstruction(model_head_pred, optimizer_head_pred, 'tail')
-            if epoch % 50 == 0:
-                mrr, mr, hits10, hits5, hits3, hits1 = compute_mrr_vector_reconstruction(model_tail_pred,
-                                                                                         model_head_pred,
-                                                                                         x_entity,
-                                                                                         x_relation,
-                                                                                         data_val.edge_index,
-                                                                                         data_val.edge_type,
-                                                                                         fast=True,
-                                                                                         entities_idx=entities_inference_idx)
-                print('mrr:', mrr, 'mr:', mr, 'hits@10:', hits10, 'hits@5:', hits5, 'hits@3:', hits3, 'hits@1:', hits1)
 
-        mrr, mr, hits10, hits5, hits3, hits1 = compute_mrr_vector_reconstruction(model_tail_pred,
-                                                                                 model_head_pred,
-                                                                                 x_entity,
-                                                                                 x_relation,
-                                                                                 data_val.edge_index,
-                                                                                 data_val.edge_type,
-                                                                                 fast=False,
-                                                                                 entities_idx=entities_inference_idx)
-        print('val mrr:', mrr, 'mr:', mr, 'hits@10:', hits10, 'hits@5:', hits5, 'hits@3:', hits3, 'hits@1:', hits1)
-        mrr, mr, hits10, hits5, hits3, hits1 = compute_mrr_vector_reconstruction(model_tail_pred,
-                                                                                 model_head_pred,
-                                                                                 x_entity,
-                                                                                 x_relation,
-                                                                                 data_test.edge_index,
-                                                                                 data_test.edge_type,
-                                                                                 fast=False,
-                                                                                 entities_idx=entities_inference_idx)
+            if epoch % 100 == 0:
+                mrr_history['epoch'].append(epoch)
+                val_mrr, mr, hits10, hits5, hits3, hits1, _, _, _ = compute_mrr_vector_reconstruction(model_tail_pred,
+                                                                                                      model_head_pred,
+                                                                                                      x_entity,
+                                                                                                      x_relation,
+                                                                                                      data_val.edge_index,
+                                                                                                      data_val.edge_type,
+                                                                                                      fast=True,
+                                                                                                      entities_idx=entities_inference_idx)
+                print('val mrr:', val_mrr, 'mr:', mr, 'hits@10:', hits10, 'hits@5:', hits5, 'hits@3:', hits3, 'hits@1:',
+                      hits1)
+                mrr_history['val'].append(val_mrr)
+
+                train_mrr, mr, hits10, hits5, hits3, hits1, _, _, _ = compute_mrr_vector_reconstruction(model_tail_pred,
+                                                                                                        model_head_pred,
+                                                                                                        x_entity,
+                                                                                                        x_relation,
+                                                                                                        data_train.edge_index,
+                                                                                                        data_train.edge_type,
+                                                                                                        fast=True,
+                                                                                                        entities_idx=entities_inference_idx)
+                print('train mrr:', train_mrr, 'mr:', mr, 'hits@10:', hits10, 'hits@5:', hits5, 'hits@3:', hits3,
+                      'hits@1:',
+                      hits1)
+                mrr_history['train'].append(train_mrr)
+
+        mrr, mr, hits10, hits5, hits3, hits1, _, _, _ = compute_mrr_vector_reconstruction(model_tail_pred,
+                                                                                          model_head_pred,
+                                                                                          x_entity,
+                                                                                          x_relation,
+                                                                                          data_val.edge_index,
+                                                                                          data_val.edge_type,
+                                                                                          fast=False,
+                                                                                          entities_idx=entities_inference_idx)
         print('test mrr:', mrr, 'mr:', mr, 'hits@10:', hits10, 'hits@5:', hits5, 'hits@3:', hits3, 'hits@1:', hits1)
-        torch.save(model_tail_pred.state_dict(), 'model_VectorReconstructionNet_tail_pred.pt')
-        torch.save(model_head_pred.state_dict(), 'model_VectorReconstructionNet_head_pred.pt')
+        mrr, mr, hits10, hits5, hits3, hits1, ranks, tail_ranks, head_ranks = compute_mrr_vector_reconstruction(
+            model_tail_pred,
+            model_head_pred,
+            x_entity,
+            x_relation,
+            data_test.edge_index,
+            data_test.edge_type,
+            fast=False,
+            entities_idx=entities_inference_idx)
+        print('test mrr:', mrr, 'mr:', mr, 'hits@10:', hits10, 'hits@5:', hits5, 'hits@3:', hits3, 'hits@1:', hits1)
+
+        with open(f'./data/ranks_{model_name}.json', 'w') as ranks_out:
+            json.dump(ranks.tolist(), ranks_out)
+
+        with open(f'./data/ranks_{model_name}_tail_pred.json', 'w') as ranks_out:
+            json.dump(tail_ranks.tolist(), ranks_out)
+
+        with open(f'./data/ranks_{model_name}_head_pred.json', 'w') as ranks_out:
+            json.dump(head_ranks.tolist(), ranks_out)
+
+        torch.save(model_tail_pred.state_dict(), f'data/{model_name}_tail_pred.pt')
+        torch.save(model_head_pred.state_dict(), f'data/{model_name}_head_pred.pt')
+        log_results(model_name, mrr, mr, hits1, hits3, hits10)
+
+    if not load_trained_model:
+        # plot mrr over epochs
+        plt.plot(mrr_history['epoch'], mrr_history['val'], '-', label='val', color='#fc8d59')
+        plt.plot(mrr_history['epoch'], mrr_history['train'], '-', label='train', color='#91bfdb')
+        plt.legend()
+        plt.title('mrr')
+        plt.savefig(f'./data/plot_mrr_{model_name}.svg')
